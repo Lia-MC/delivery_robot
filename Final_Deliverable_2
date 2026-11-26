@@ -68,14 +68,18 @@ class FinalProject(Node):
     def colors(self, rgb):
         """Convert mean RGB to a color name."""
         r, g, b = rgb
-        if r > 220:# and g < 100 and b < 100:
+        if r > 220 and g > 140 and g < 155 and b > 70 and b < 80:# and g < 100 and b < 100:
             return "orange"
-        elif r > 180:
+        elif r > 180 and g > 165 and b > 150 and b < 160:
             return "yellow"
-        elif r > 170 and b > 170:
+        elif r > 160 and r < 170 and g > 165 and g < 165 and b > 160 and b < 170:
             return "blue"
-        elif r > 150 and b < 170: # r < 165 and 
+        elif r > 160 and r < 170 and g > 170 and g < 180 and b > 160 and b < 170:
             return "green"
+        
+        # black 
+        # 180 165 164
+
         # elif r > 200 and g > 200 and b > 200:
         #     return "white"
         else: 
@@ -148,7 +152,8 @@ class FinalProject(Node):
         twist_stamped = TwistStamped()
         twist_stamped.twist.angular.z = 0.0
         twist_stamped.twist.linear.x = u
-
+        twist_stamped.header.stamp = self.get_clock().now().to_msg()
+        self.cmd_pub.publish(twist_stamped)
     # --- LINE FOLLOWING ---
 
     def follow_the_line(self, error): 
