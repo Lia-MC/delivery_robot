@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import UInt32, Float64MultiArray 
+from geometry_msgs.msg import TwistStamped  # [ADDED] was missing
+
+class FinalProject(Node):
+    def __init__(self):
+        super().__init__('Final_Project')
+        self.get_logger().info('Final Project node has been initialized.')
+
+        # --- LINE FOLLOWING PARAMETERS ---
+        
+        # might need to tune these values 
+        # dead band
+        self.dead_band = 7 # pixels
+        # p
+        self.kp = 0.001
+        # i
+        self.ki = 0.000002
+        self.integral = 0.0 # m/s
+        # d
+        self.kd = 0.000008
+        self.derivative = 0.0
+        self.lasterror = 0.0
+
+        # [ADDED] target line index (pixels); TODO: set to the real centre value
+        self.desired = 320
+        # [ADDED] initial speeds so cases 1 and 2 don't hit an AttributeError
+        self.linear_speed = 0.05
+        self.angular_speed = 0.0
+        # [ADDED] clamp for the integral term (anti-windup); tune as needed
+        self.integral_limit = 5000.0
+
+        # [ADDED] publisher for velocity commands; TODO: confirm topic name for your robot
+        self.cmd_pub = self.create_publisher(TwistStamped, "cmd_vel", 10)
+
+        self.state_model = [[0.85, 0.05, 0.05], # row 1 = X - chi
+               [0.1, 0.9, 0.1], 
+               [0.05, 0.05, 0.85]]
+
+        # cols: blue green yellow orange
+        self.measurement_model = [[0.6, 0.2, 0.05, 0.05], # row 1 = blue
+                            [0.2, 0.6, 0.05, 0.05], 
+                            [0.05, 0.05, 0.65, 0.2], 
+                            [0.05, 0.05, 0.15, 0.6], 
+                            [0.1, 0.1, 0.1, 0.1]]
+
+
+        self.zk = None
+        self.U = 1
+        self.k = 0
+
+        self.beliefs = self.initialize_belief()
+
+        # --- SUBSCRIBERS ---
+
+        # line_idx for line-following
+        self.color_sub = self.create_subscription(
+            UInt32, "line_idx", self.camera_callback, 1
+        )
+        
+        # mean RGB of the image for localization
+        self.rgb_sub = self.create_subscription(
+            Float64MultiArray, "mean_img_rgb", self.rgb_callback, 1
+        )
+        # latest RGB reading (None until first message)
+        self.mean_rgb = None
+
+    def colors(self, rgb):
+        """Convert mean RGB to a color name."""
+        r, g, b = rgb
+        if r > 200 and g < 100 and b < 100:
+            return "orange"
+        elif r < 100 and g > 200 and b < 100:
+            return "green"
+        elif r < 100 and g < 100 and b > 200:
+            return "blue"
+        elif r > 200 and g > 200 and b < 100:
+            return "yellow"
+        # elif r > 200 and g > 200 and b > 200:
+        #     return "white"
+        else: 
+            return "nothing"
+
+    # --- CALLBACKS ---
+
+    def rgb_callback(self, msg):
+        """Callback to store the latest mean RGB"""
+        # maybe convert it to a int or string representing each color
+        self.mean_rgb = list(msg.data)
+
+    def camera_callback(self, msg):
+        """Callback for line index."""
+        # access the line_idx using msg.data
+
+        self.get_logger().info("\ncamera callback")
+
+        # CHECK FOR LOCALIZATION
+        if self.should_localize():
+            # TODO: bayesian localization actions (part 1?)
+            # also need to go straight for a bit to get back on the white line
+            return  # [ADDED] fixes the empty if-body; skips line following while localizing
+
+        # LINE FOLLOWING
+        self.get_logger().info("line following")
+
+        actual = msg.data
+        error = self.desired - actual # update error  [ADDED] self.desired instead of undefined desired
+
+        #self.get_logger().info("check 2")
+
+        # LINE-FOLLOWING WITH COLOUR
+        # if self.colors(self.mean_rgb) == 'white':
+        #     self.follow_the_line(error)
+        # if self.colors(self.mean_rgb) != 'white':
+        #     u = 0.05
+        #     twist_stamped.twist.linear.x = u
+
+        # if self.colors(self.mean_rgb) == 'orange' or self.colors(self.mean_rgb) == 'green' or self.colors(self.mean_rgb) == 'blue' or self.colors(self.mean_rgb) == 'yellow':
+        #     u = 0.05
+        #     if self.prev_colour != self.colors(self.mean_rgb):
+        #         self.scenario[0][].append(self.idx)
+        #         self.prev_colour = self.colors(self.mean_rgb)
+        #         self.idx = 
+        #     self.straight(u)
+        # else:
+        #     self.follow_the_line(error)
+
+        if self.colors(self.mean_rgb) == 'orange' or self.colors(self.mean_rgb) == 'green' or self.colors(self.mean_rgb) == 'blue' or self.colors(self.mean_rgb) == 'yellow':
+            u = 0.05
+            if self.zk != self.colors(self.mean_rgb):
+                # self.k += 1
+                self.zk = self.colors(self.mean_rgb)
+                self.beliefs = self.belief_update(self.correction(self.prediction(self.beliefs, self.U), self.zk))
+            self.straight(u)
+        else:
+            self.follow_the_line(error)
+
+        # beliefs
+        self.get_logger().info(str(self.beliefs))
+
+    # Straight
+    def straight(self, u):
+        twist_stamped = TwistStamped()
+        twist_stamped.twist.linear.x = u
+
+    # --- LINE FOLLOWING ---
+
+    def follow_the_line(self, error): 
+        twist_stamped = TwistStamped()
+        # [ADDED] timestamp for the stamped message
+        twist_stamped.header.stamp = self.get_clock().now().to_msg()
+
+        # integral
+        self.integral = self.integral + error
+        # [ADDED] anti-windup clamp
+        self.integral = max(-self.integral_limit, min(self.integral_limit, self.integral))
+
+        # derivative
+        # [ADDED] swapped order: compute derivative BEFORE updating lasterror (was always 0)
+        self.derivative = error - self.lasterror
+        self.lasterror = error
+
+        # pid
+        correction = self.kp*error + self.ki*self.integral + self.kd*self.derivative
+
+        self.get_logger().info(str(error))
+        self.get_logger().info(str(correction))
+
+
+        # correction
+        if error > self.dead_band/2: # landmark left of robot
+            self.angular_speed = correction
+            #self.linear_speed = 0.01
+            twist_stamped.twist.angular.z = self.angular_speed
+            twist_stamped.twist.linear.x = self.linear_speed
+            self.get_logger().info("case 1, landmark on left")
+
+        elif error < -self.dead_band/2: # landmark right of robot
+            self.angular_speed = correction
+            #self.linear_speed = 0.01
+            twist_stamped.twist.angular.z = self.angular_speed
+            twist_stamped.twist.linear.x = self.linear_speed
+            self.get_logger().info("case 2, landmark on right")
+
+        else:
+            self.angular_speed = 0.0
+            self.linear_speed = 0.05
+            twist_stamped.twist.angular.z = self.angular_speed
+            twist_stamped.twist.linear.x = self.linear_speed
+            self.get_logger().info("case 3")
+
+        # drive
+        
+        self.cmd_pub.publish(twist_stamped)
+        # [ADDED] removed self._state_elapsed += self._period (attributes never defined)
+
+
+    # --- LOCALIZATION ---
+
+    # this one might be unecessary, a simple check directly in camera_callback might be enough
+    def should_localize(self):
+        """Return True if a bayesian localization step is needed."""
+        if self.mean_rgb is None:
+            return False
+        # TODO: e.g. check if the RGB matches a colour marker
+        return False
+
+
+    # --- BAYESIAN LOCALIZATION ---
+
+    
+    def initialize_belief(self):
+        belief = [1/11, 1/11, 1/11, 1/11, 1/11, 1/11, 1/11, 1/11, 1/11, 1/11, 1/11]
+        return belief
+
+    def prediction(self, belief, u):
+        belief_pred = [0] * len(belief)
+        for i in range(len(belief)):
+            if u == -1:
+                belief_pred[i] = self.state_model[2][0] * belief[(i-1)%11] + self.state_model[1][0] * belief[i] + self.state_model[0][0] * belief[(i+1)%11]
+            elif u == 0:
+                belief_pred[i] = self.state_model[0][1] * belief[(i+1)%11] + self.state_model[1][1] * belief[i] + self.state_model[2][1] * belief[(i-1)%11]
+            else:
+                belief_pred[i] = self.state_model[0][2] * belief[(i+1)%11] + self.state_model[1][2] * belief[i] + self.state_model[2][2] * belief[(i-1)%11]
+        return belief_pred  
+
+    def correction(self, belief_pred, z):
+        belief_corr = [0] * len(belief_pred)
+        for i in range(len(belief_corr)):
+            if i == 0 or i == 8:
+                a  = 2
+            elif i == 1 or i== 5 or i == 9:
+                a = 1
+            elif i == 2 or i == 6 or i == 10:
+                a = 0
+            elif i == 3 or i == 4 or i == 7: 
+                a = 3
+            if z == "blue":
+                belief_corr[i] = self.measurement_model[0][a] * belief_pred[i]
+            elif z == "green":
+                belief_corr[i] = self.measurement_model[1][a] * belief_pred[i]
+            elif z == "yellow":
+                belief_corr[i] = self.measurement_model[2][a] * belief_pred[i]
+            elif z == "orange":
+                belief_corr[i] = self.measurement_model[3][a] * belief_pred[i]
+            else:
+                belief_corr[i] = self.measurement_model[4][a] * belief_pred[i]
+        return belief_corr
+
+    def belief_update(self, belief_corr):
+        total= 0
+        for e in belief_corr:
+            total += e
+        for i in range(len(belief_corr)):
+            belief_corr[i] = belief_corr[i] / total
+        belief_update =belief_corr
+        return belief_update
+
+
+
+def main():
+    rclpy.init()
+    node = FinalProject()
+    
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        node.destroy_node()
+
+if __name__ == '__main__':
+    main()
