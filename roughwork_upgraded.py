@@ -2,7 +2,7 @@
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import UInt32, Float64MultiArray 
-from geometry_msgs.msg import TwistStamped  # [ADDED] was missing
+from geometry_msgs.msg import TwistStamped 
 
 class FinalProject(Node):
     def __init__(self):
@@ -24,15 +24,13 @@ class FinalProject(Node):
         self.derivative = 0.0
         self.lasterror = 0.0
 
-        # [ADDED] target line index (pixels); TODO: set to the real centre value
+        # target line index (pixels)
         self.desired = 320
-        # [ADDED] initial speeds so cases 1 and 2 don't hit an AttributeError
+        # initial speeds
         self.linear_speed = 0.05
         self.angular_speed = 0.0
-        # [ADDED] clamp for the integral term (anti-windup); tune as needed
         self.integral_limit = 5000.0
 
-        # [ADDED] publisher for velocity commands; TODO: confirm topic name for your robot
         self.cmd_pub = self.create_publisher(TwistStamped, "cmd_vel", 10)
 
         self.state_model = [[0.85, 0.05, 0.05], # row 1 = X - chi
@@ -96,17 +94,17 @@ class FinalProject(Node):
 
         self.get_logger().info("\ncamera callback")
 
-        # CHECK FOR LOCALIZATION
-        if self.should_localize():
-            # TODO: bayesian localization actions (part 1?)
-            # also need to go straight for a bit to get back on the white line
-            return  # [ADDED] fixes the empty if-body; skips line following while localizing
+        # # CHECK FOR LOCALIZATION
+        # if self.should_localize():
+        #     # add bayesian localization actions (part 1?)
+        #     # also need to go straight for a bit to get back on the white line
+        #     return  # fixes the empty if-body; skips line following while localizing
 
         # LINE FOLLOWING
         self.get_logger().info("line following")
 
         actual = msg.data
-        error = self.desired - actual # update error  [ADDED] self.desired instead of undefined desired
+        error = self.desired - actual 
 
         #self.get_logger().info("check 2")
 
@@ -149,16 +147,15 @@ class FinalProject(Node):
 
     def follow_the_line(self, error): 
         twist_stamped = TwistStamped()
-        # [ADDED] timestamp for the stamped message
+        # timestamp for the stamped message
         twist_stamped.header.stamp = self.get_clock().now().to_msg()
 
         # integral
         self.integral = self.integral + error
-        # [ADDED] anti-windup clamp
+        # anti-windup clamp
         self.integral = max(-self.integral_limit, min(self.integral_limit, self.integral))
 
         # derivative
-        # [ADDED] swapped order: compute derivative BEFORE updating lasterror (was always 0)
         self.derivative = error - self.lasterror
         self.lasterror = error
 
@@ -194,8 +191,6 @@ class FinalProject(Node):
         # drive
         
         self.cmd_pub.publish(twist_stamped)
-        # [ADDED] removed self._state_elapsed += self._period (attributes never defined)
-
 
     # --- LOCALIZATION ---
 
@@ -255,7 +250,7 @@ class FinalProject(Node):
             total += e
         for i in range(len(belief_corr)):
             belief_corr[i] = belief_corr[i] / total
-        belief_update =belief_corr
+        belief_update = belief_corr
         return belief_update
 
 
