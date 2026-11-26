@@ -1,11 +1,146 @@
 #!/usr/bin/env python3
+import math
 import rclpy
 from rclpy.node import Node
+from geometry_msgs.msg import TwistStamped
+from std_msgs.msg import UInt32, Float64MultiArray
 
 class FinalProject(Node):
     def __init__(self):
         super().__init__('Final_Project')
         self.get_logger().info('Final Project node has been initialized.')
+
+        # --- LINE-FOLLOWING PARAMETERS ---
+        # self.declare_parameter('linear_speed', 0.2) # m/s
+        # self.declare_parameter('angular_speed', 0) # rad/s
+        self.linear_speed = 0.05 # m/s
+        self.angular_speed = 0 # rad/s
+
+        self.declare_parameter('dead_band', 7) # pixels
+
+        # bang bang
+        self.declare_parameter('turn', 0.008) # rad/s
+
+        # proportional
+        self.declare_parameter('kp', 0.001)
+
+        # integral
+        self.declare_parameter('ki', 0.000002)
+
+        self.integral = 0.0 # m/s
+
+        # derivative
+        self.declare_parameter('kd', 0.000008)
+        self.derivative = 0.0
+
+        self.lasterror = 0.0
+
+        # --- State for the example drive pattern ---
+        # is this necessary?
+        self._state_elapsed = 0.0
+        self._period = 1.0 / publish_rate_hz
+
+        # --- LOCALIZATION PARAMETERS ---
+
+        # --- PUBLISHERS AND SUBSCRIBERS ---
+
+        # publsher: TwistStamped for movement
+        self.cmd_pub = self.create_publisher(TwistStamped, "cmd_vel", 1)
+
+        # subscriber: line_idx for line-following
+        self.color_sub = self.create_subscription(
+            UInt32, "line_idx", self.camera_callback, 1
+        )
+
+        # subscriber: mean_img_rgb for localization
+        self.rgb_sub = self.create_subscription(
+            Float64MultiArray, "mean_img_rgb", self.rgb_callback, 1
+        )
+        # latest RGB reading (None until first message)
+        self.mean_rgb = None
+
+        
+    def p(self, name):
+        """ access parameters """
+        return self.get_parameter(name).value 
+
+    # --- CALLBACKS ---
+
+    def rgb_callback(self, msg):
+        """callback for latest mean rgb"""
+        # could convert to into an integer or something to use
+        self.mean_rgb = None
+
+    def camera_callback(self, msg):
+        """Callback for line index."""
+        # access the value using msg.data
+
+        self.get_logger().info("\ncamera_callback")
+
+        # CHECK FOR LOCALIZATION
+        # use mean rgb here
+
+        # LINE-FOLLOWING
+
+        # update error
+        actual = msg.data
+        error = desired-actual
+
+        self.get_logger().info("check 2")
+
+        self.follow_the_line(error)
+
+    # --- LINE-FOLLOWING ---
+
+    def follow_the_line(self, error): 
+        twist_stamped = TwistStamped()
+        turn=self.p('turn')
+
+        dead_band=self.p('dead_band')
+        # p
+        kp = self.p('kp')
+        # i
+        ki = self.p('ki')
+        self.integral = self.integral + error
+        # d
+        kd = self.p('kd')
+        self.lasterror = error
+        self.derivative = error - self.lasterror
+
+        # pid
+        correction = kp*error + ki*self.integral + kd * self.derivative
+
+        self.get_logger().info(str(error))
+        self.get_logger().info(str(correction))
+
+
+        # correction
+        if error > dead_band/2: # landmark left of robot
+            self.angular_speed = correction
+            #self.linear_speed = 0.01
+            twist_stamped.twist.angular.z = self.angular_speed
+            twist_stamped.twist.linear.x = self.linear_speed
+            self.get_logger().info("case 1, landmark on left")
+
+        elif error < -dead_band/2: # landmark right of robot
+            self.angular_speed = correction
+            #self.linear_speed = 0.01
+            twist_stamped.twist.angular.z = self.angular_speed
+            twist_stamped.twist.linear.x = self.linear_speed
+            self.get_logger().info("case 2, landmark on right")
+
+        else:
+            self.angular_speed = 0.0
+            self.linear_speed = 0.05
+            twist_stamped.twist.angular.z = self.angular_speed
+            twist_stamped.twist.linear.x = self.linear_speed
+            self.get_logger().info("case 3")
+
+        # drive
+        
+        self.cmd_pub.publish(twist_stamped)
+        self._state_elapsed += self._period
+        # pass
 
 
 def main():
