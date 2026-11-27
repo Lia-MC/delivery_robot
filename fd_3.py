@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import rclpy
+import numpy as np
 from rclpy.node import Node
 from std_msgs.msg import UInt32, Float64MultiArray 
 from geometry_msgs.msg import TwistStamped 
@@ -70,9 +71,33 @@ class FinalProject(Node):
         self.mean_rgb = [0.0, 0.0, 0.0]
 
     def colors(self, rgb):
-        """Convert mean RGB to a color name."""
+        """Convert mean RGB to a color name and check colours"""
         r, g, b = rgb
+
         mag = r + g + b  # see if normalizing yields better results
+        norm_r = r / mag
+        norm_g = g / mag
+        norm_b = b / mag
+        
+        if norm_r > 0.4:
+            # r is really large
+            return "orange"
+        elif norm_r > 0.36:
+            # r stil kind of large
+            return "yellow"
+        elif abs(norm_r - norm_g) < 0.01 and abs(norm_b - norm_g) < 0.01:
+            # all kind of even
+            return "blue"
+        elif abs(norm_r - norm_b) < 0.01:
+            # r and b even, g higher
+            return "green"
+        elif abs(norm_g - norm_b) < 0.01:
+            # g and b even, r higher
+            return "white"
+        else: 
+            return "nothing"
+
+        
         #if r > 220 and g > 140 and g < 155 and b > 70 and b < 80:# and g < 100 and b < 100:
         #    return "orange"
         #elif r > 180 and g > 165 and b > 150 and b < 160:
@@ -87,8 +112,8 @@ class FinalProject(Node):
 
         # elif r > 200 and g > 200 and b > 200:
         #     return "white"
-        else: 
-            return "white"
+        #else: 
+        #    return "white"
 
     # --- CALLBACKS ---
 
